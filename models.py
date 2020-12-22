@@ -1,6 +1,4 @@
-import torch
 import torch.nn as nn
-from torch.nn import CrossEntropyLoss
 from pytorch_pretrained_bert.modeling import BertModel, BertPreTrainedModel
 
 
@@ -9,9 +7,8 @@ class BertForSequenceClassification(BertPreTrainedModel):
         super().__init__(config)
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        # FIXME
-        self.lp_num_labels = 2
-        self.rp_num_labels = 11
+        self.lp_num_labels = config.lp_n_label
+        self.rp_num_labels = config.rp_n_label
         self.lp_classifier = nn.Linear(config.hidden_size, self.lp_num_labels)
         self.rp_classifier = nn.Linear(config.hidden_size, self.rp_num_labels)
         self.mr_classifier = nn.Linear(config.hidden_size, 1)

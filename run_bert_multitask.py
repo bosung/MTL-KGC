@@ -17,34 +17,19 @@
 from __future__ import absolute_import, division, print_function
 
 import argparse
-import csv
 import logging
-import os
 import random
-import sys
-
-import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
-from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
-from torch.nn import CrossEntropyLoss, MSELoss, MarginRankingLoss
-from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import matthews_corrcoef, f1_score
+from torch.nn import CrossEntropyLoss, MarginRankingLoss
 from sklearn import metrics
-
-
-import torch.nn as nn
-from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE, WEIGHTS_NAME, CONFIG_NAME
-from pytorch_pretrained_bert.modeling import BertModel, BertPreTrainedModel
-from transformers import AdamW, BertConfig, BertTokenizer
-
+from pytorch_pretrained_bert.file_utils import WEIGHTS_NAME, CONFIG_NAME
+from transformers import AdamW, BertTokenizer
+from models import BertForSequenceClassification
 from utils import *
-from run_bert_margin_rank import KGProcessor as MRProcessor
-from run_bert_margin_rank import convert_examples_to_features as mr_convert_examples_to_features
-
 from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
@@ -203,7 +188,6 @@ def main():
     rp_label_list = rp_processor.get_labels(args.data_dir)
     rp_num_labels = len(rp_label_list)
     rr_label_list = rr_processor.get_labels(args.data_dir)
-    rr_num_labels = len(rr_label_list)
 
     entity_list = lp_processor.get_entities(args.data_dir)
 
@@ -296,9 +280,9 @@ def main():
                 mr_train_data = torch.load(train_bin_path)
                 logger.info("load %s" % train_bin_path)
             else:
-                mr_train_examples = mr_processor.get_train_examples(args.data_dir)
-                train_features = mr_convert_examples_to_features(
-                    mr_train_examples, mr_label_list, args.max_seq_length, tokenizer)
+                mr_train_examples = rr_processor.get_train_examples(args.data_dir)
+                train_features = rr_convert_examples_to_features(
+                    mr_train_examples, rr_label_list, args.max_seq_length, tokenizer)
                 logger.info("***** Running training *****")
                 logger.info("  Num examples = %d", len(mr_train_examples))
                 all_input_ids1 = torch.tensor([f.input_ids1 for f in train_features], dtype=torch.long)
