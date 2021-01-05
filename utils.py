@@ -2,6 +2,7 @@ import os
 import numpy as np
 import random
 import torch
+from torch.utils.data import Dataset
 
 
 def order_selection(tasks, number_of_batches):
@@ -325,7 +326,7 @@ class RPProcessor(KGProcessor):
         self.labels = set()
 
     def get_labels(self, data_dir):
-        return self.get_relations()
+        return self.get_relations(data_dir)
     
     def _create_examples(self, lines, set_type, data_dir):
         """Creates examples for the training and dev sets."""
