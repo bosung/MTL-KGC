@@ -27,7 +27,7 @@ from tqdm import tqdm, trange
 from torch.nn import CrossEntropyLoss, MarginRankingLoss
 from sklearn import metrics
 from pytorch_pretrained_bert.file_utils import WEIGHTS_NAME, CONFIG_NAME
-from transformers import AdamW, BertTokenizer
+from transformers import AdamW, BertTokenizer, BertConfig
 from models import BertForSequenceClassification
 from utils import *
 from torch.utils.tensorboard import SummaryWriter
@@ -192,26 +192,12 @@ def main():
     entity_list = lp_processor.get_entities(args.data_dir)
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
-    # tokenizer = BertTokenizer.from_pretrained(".", do_lower_case=args.do_lower_case)
-
-    # train_examples = None
-    # num_train_optimization_steps = 0
-    # if args.do_train:
-    #     lp_train_examples = lp_processor.get_train_examples(args.data_dir)
-    #     rp_train_examples = rp_processor.get_train_examples(args.data_dir)
-    #     # TODO train_examples ??
-    #     train_examples = lp_train_examples + rp_train_examples
-    #     num_train_optimization_steps = int(
-    #         len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
-    #     if args.local_rank != -1:
-    #         num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
 
     # Prepare model
-    # config = BertConfig.from_pretrained(args.bert_model)
-    # setattr(config, "lp_num_labels", lp_num_labels)
-    # setattr(config, "rp_num_labels", rp_num_labels)
-    # cache_dir = args.cache_dir if args.cache_dir else os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(args.local_rank))
-    model = BertForSequenceClassification.from_pretrained(args.bert_model)
+    config = BertConfig.from_pretrained(args.bert_model)
+    setattr(config, "lp_num_labels", lp_num_labels)
+    setattr(config, "rp_num_labels", rp_num_labels)
+    model = BertForSequenceClassification.from_pretrained(args.bert_model, config=config)
     model.to(device)
     if args.local_rank != -1:
         try:
@@ -392,14 +378,6 @@ def main():
         torch.save(model_to_save.state_dict(), output_model_file)
         model_to_save.config.to_json_file(output_config_file)
         tokenizer.save_vocabulary(args.output_dir)
-
-        # Load a trained model and vocabulary that you have fine-tuned
-        # model = BertForSequenceClassification.from_pretrained(args.output_dir)
-        # tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-    else:
-        pass
-    #     model = BertForSequenceClassification.from_pretrained(args.bert_model)
-    # model.to(device)
 
     if args.do_predict and (args.local_rank == -1 or torch.distributed.get_rank() == 0) and args.eval_task == "lp":
         # evaluate Link Prediction task

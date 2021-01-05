@@ -1,5 +1,5 @@
 import torch.nn as nn
-from pytorch_pretrained_bert.modeling import BertModel, BertPreTrainedModel
+from transformers import BertModel, BertPreTrainedModel
 
 
 class BertForSequenceClassification(BertPreTrainedModel):
@@ -7,14 +7,14 @@ class BertForSequenceClassification(BertPreTrainedModel):
         super().__init__(config)
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.lp_num_labels = config.lp_n_label
-        self.rp_num_labels = config.rp_n_label
+        self.lp_num_labels = config.lp_num_labels
+        self.rp_num_labels = config.rp_num_labels
         self.lp_classifier = nn.Linear(config.hidden_size, self.lp_num_labels)
         self.rp_classifier = nn.Linear(config.hidden_size, self.rp_num_labels)
         self.mr_classifier = nn.Linear(config.hidden_size, 1)
         self.layer_norm = nn.LayerNorm(config.hidden_size, self.lp_num_labels)
         self.sigmoid = nn.Sigmoid()
-        self.apply(self.init_bert_weights)
+        self.init_weights()
 
     def forward(
             self,
