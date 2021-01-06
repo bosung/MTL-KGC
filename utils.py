@@ -1,8 +1,13 @@
+import csv
+import sys
 import os
 import numpy as np
 import random
 import torch
+import logging
 from torch.utils.data import Dataset
+
+logger = logging.getLogger(__name__)
 
 
 def order_selection(tasks, number_of_batches):
@@ -31,6 +36,44 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
+
+
+def _truncate_seq_pair(tokens_a, tokens_b, max_length):
+    """Truncates a sequence pair in place to the maximum length."""
+
+    # This is a simple heuristic which will always truncate the longer sequence
+    # one token at a time. This makes more sense than truncating an equal percent
+    # of tokens from each, since if one sequence is very short then each token
+    # that's truncated likely contains more information than a longer sequence.
+    while True:
+        total_length = len(tokens_a) + len(tokens_b)
+        if total_length <= max_length:
+            break
+        if len(tokens_a) > len(tokens_b):
+            tokens_a.pop()
+        else:
+            tokens_b.pop()
+
+
+def _truncate_seq_triple(tokens_a, tokens_b, tokens_c, max_length):
+    """Truncates a sequence triple in place to the maximum length."""
+
+    # This is a simple heuristic which will always truncate the longer sequence
+    # one token at a time. This makes more sense than truncating an equal percent
+    # of tokens from each, since if one sequence is very short then each token
+    # that's truncated likely contains more information than a longer sequence.
+    while True:
+        total_length = len(tokens_a) + len(tokens_b) + len(tokens_c)
+        if total_length <= max_length:
+            break
+        if len(tokens_a) > len(tokens_b) and len(tokens_a) > len(tokens_c):
+            tokens_a.pop()
+        elif len(tokens_b) > len(tokens_a) and len(tokens_b) > len(tokens_c):
+            tokens_b.pop()
+        elif len(tokens_c) > len(tokens_a) and len(tokens_c) > len(tokens_b):
+            tokens_c.pop()
+        else:
+            tokens_c.pop()
 
 
 class InputExample(object):
