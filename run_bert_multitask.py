@@ -133,6 +133,7 @@ def main():
     parser.add_argument('--tb_log_dir', type=str, default="runs/null")
     parser.add_argument('--margin', type=float, default=0.1)
     parser.add_argument('--debug_index', type=int, default=0)
+    parser.add_argument('--negative_sample_size', type=int, default=10)
     args = parser.parse_args()
 
     summary = SummaryWriter(log_dir=args.tb_log_dir)
@@ -180,7 +181,7 @@ def main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    lp_processor = LPProcessor()
+    lp_processor = LPProcessor(args.data_dir)
     rp_processor = RPProcessor()
     rr_processor = RRProcessor()
 
@@ -258,6 +259,9 @@ def main():
                 rp_train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
                 torch.save(rp_train_data, train_bin_path)
             task_total_dataset["rp"] = rp_train_data
+            train_dataloader["rp"] = DataLoader(task_total_dataset["rp"],
+                                                batch_size=args.train_batch_size,
+                                                shuffle=True, collate_fn=BertTrainDataset.collate_fn_bert)
             logger.info("  [Relation Prediction] Num examples = %d", len(rp_train_data))
         if "rr" in task_list:
             head_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
@@ -271,12 +275,6 @@ def main():
             train_dataloader["rr"] = rr_train_dataloader
             logger.info("  [Margin Rank] Num examples = %d", len(task_total_dataset["rr"]))
 
-        # get train loaders
-        train_dataloader = {}
-        for task in task_total_dataset:
-            train_dataloader[task] = DataLoader(task_total_dataset[task],
-                                                sampler=RandomSampler(task_total_dataset[task]),
-                                                batch_size=args.train_batch_size)
         batch_nums = {task: len(train_dataloader[task]) for task in task_total_dataset}
         #task_total_batch_num = sum([batch_nums[k] for k in batch_nums])
 
