@@ -298,7 +298,7 @@ def main():
 
                 if cur_batch_task in ["lp", "rp"]:
                     input_ids, input_mask, segment_ids, label_ids = tuple(t.to(device) for t in batch_some_task)
-                    logits = model(input_ids, segment_ids, input_mask, labels=label_ids, task=cur_batch_task)
+                    logits = model(input_ids, segment_ids, input_mask, task=cur_batch_task)
                     loss_fct = CrossEntropyLoss()
                     if cur_batch_task == "lp":
                         loss = loss_fct(logits.view(-1, lp_num_labels), label_ids.view(-1))
@@ -306,11 +306,13 @@ def main():
                     else:  # task == "rp"
                         loss = loss_fct(logits.view(-1, rp_num_labels), label_ids.view(-1))
                         loss = loss * 1
-                elif cur_batch_task in ["mr"]:
+                elif cur_batch_task in ["rr"]:
                     batch = tuple(t.to(device) for t in batch_some_task)
                     input_ids1, input_mask1, segment_ids1, input_ids2, input_mask2, segment_ids2, label_ids = batch
-                    logits1 = model(input_ids1, segment_ids1, input_mask1, labels=None, task=cur_batch_task)
-                    logits2 = model(input_ids2, segment_ids2, input_mask2, labels=None, task=cur_batch_task)
+                    logits1 = model(input_ids=input_ids1, token_type_ids=segment_ids1,
+                                    attention_mask=input_mask1, task=cur_batch_task)
+                    logits2 = model(input_ids=input_ids2, token_type_ids=segment_ids2,
+                                    attention_mask=input_mask2, task=cur_batch_task)
                     loss_fct = MarginRankingLoss(margin=args.margin)
                     loss = loss_fct(logits1, logits2, label_ids.view(-1))
                     loss = loss * 1
@@ -760,21 +762,16 @@ def main():
 
         def _get_tensordataset(corrupt_list):
             tmp_examples = lp_processor._create_examples(corrupt_list, "test", args.data_dir)
-            # print(len(tmp_examples))
             tmp_features = lp_convert_examples_to_features(tmp_examples, lp_label_list, args.max_seq_length, tokenizer,
                                                            print_info=False)
             all_input_ids = torch.tensor([f.input_ids for f in tmp_features], dtype=torch.long)
             all_input_mask = torch.tensor([f.input_mask for f in tmp_features], dtype=torch.long)
             all_segment_ids = torch.tensor([f.segment_ids for f in tmp_features], dtype=torch.long)
-            # all_label_ids = torch.tensor([f.label_id for f in tmp_features], dtype=torch.long)
             return TensorDataset(all_input_ids, all_input_mask, all_segment_ids)
 
         test_triple = test_triples[args.debug_index]
 
-        head = test_triple[0]
-        relation = test_triple[1]
-        tail = test_triple[2]
-        # print(test_triple, head, relation, tail)
+        head, relation, tail = test_triple
 
         head_corrupt_list = [test_triple]
         tail_corrupt_list = [test_triple]
@@ -838,16 +835,7 @@ def main():
         if rank1 < 10:
             top_ten_hit_count += 1
 
-        # with open("debugging_result_left.txt", "w") as f:
-        #     f.write(str(test_triple) + "\n")
-        #     f.write("\t".join([entity2text[head], relation, entity2text[tail]]) + "\n")
-        #     f.write("rank: %d\n\n" % rank1)
-        #     for idx in range(len(argsort1)):
-        #         __idx = argsort1[idx]
-        #         h, _, _ = head_corrupt_list[__idx]
-        #         f.write('\t'.join([str(idx), str(argvalues[idx]), entity2text[h]]) + '\n')
         print("====== head corrupt result =======")
-        print(test_triple)
         print("<%s, %s, %s>" % (entity2text[head].split(",")[0], relation, entity2text[tail].split(",")[0]))
         print("rank: ", rank1+1)
         scores, words, entities = [], [], []
@@ -872,7 +860,7 @@ def main():
             segment_ids = segment_ids.to(device)
 
             with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, labels=None, task="lp")
+                logits = model(input_ids, segment_ids, input_mask, task="lp")
             if len(preds) == 0:
                 batch_logits = logits.detach().cpu().numpy()
                 preds.append(batch_logits)

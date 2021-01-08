@@ -21,7 +21,6 @@ class BertForSequenceClassification(BertPreTrainedModel):
             input_ids=None,
             token_type_ids=None,
             attention_mask=None,
-            labels=None,
             task=None,
     ):
         outputs = self.bert(input_ids,
@@ -35,7 +34,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
             logits = self.lp_classifier(pooled_output)
         elif task == "rp":
             logits = self.rp_classifier(pooled_output)
-        elif task == "mr":
+        elif task == "rr":
             logits = self.sigmoid(self.mr_classifier(pooled_output))
         else:
             raise TypeError

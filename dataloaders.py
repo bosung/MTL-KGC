@@ -157,12 +157,21 @@ class BertTrainDataset(Dataset):
 
     @staticmethod
     def collate_fn_rr(data):
-        # TODO
         inputs = torch.cat([_[0] for _ in data], dim=0)
         segment_ids = torch.cat([_[1] for _ in data], dim=0)
         attn_masks = torch.cat([_[2] for _ in data], dim=0)
         labels = torch.cat([_[3] for _ in data], dim=0)
-        return inputs, segment_ids, attn_masks, labels
+
+        _mask = (labels == 1)
+        in_ids1 = inputs[_mask]
+        in_ids2 = inputs[~_mask]
+        seg1 = segment_ids[_mask]
+        seg2 = segment_ids[~_mask]
+        attn1 = attn_masks[_mask]
+        attn2 = attn_masks[~_mask]
+
+        label_ids = labels.new_ones()  # labels should be 1 (margin ranking loss)
+        return in_ids1, attn1, seg1, in_ids2, attn2, seg2, label_ids
 
 
     @staticmethod
