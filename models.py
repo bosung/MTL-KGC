@@ -16,16 +16,9 @@ class BertForSequenceClassification(BertPreTrainedModel):
         self.sigmoid = nn.Sigmoid()
         self.init_weights()
 
-    def forward(
-            self,
-            input_ids=None,
-            token_type_ids=None,
-            attention_mask=None,
-            task=None,
-    ):
-        outputs = self.bert(input_ids,
-                            token_type_ids=token_type_ids,
-                            attention_mask=attention_mask)
+    def forward(self, input_ids=None, token_type_ids=None, attention_mask=None, task=None,
+                input_ids2=None, token_type_ids2=None, attention_mask2=None):
+        outputs = self.bert(input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
 
         pooled_output = outputs[1]
         pooled_output = self.dropout(pooled_output)
@@ -35,7 +28,12 @@ class BertForSequenceClassification(BertPreTrainedModel):
         elif task == "rp":
             logits = self.rp_classifier(pooled_output)
         elif task == "rr":
-            logits = self.sigmoid(self.mr_classifier(pooled_output))
+            logits1 = self.sigmoid(self.mr_classifier(pooled_output))
+            outputs2 = self.bert(input_ids2, token_type_ids=token_type_ids2, attention_mask=attention_mask2)
+            pooled_output2 = outputs2[1]
+            pooled_output2 = self.dropout(pooled_output2)
+            logits2 = self.sigmoid(self.mr_classifier(pooled_output2))
+            return logits1, logits2
         else:
             raise TypeError
 

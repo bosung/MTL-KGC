@@ -126,15 +126,24 @@ class BertTrainDataset(Dataset):
             attn_masks.append(mask)
             labels.append(0)
 
-        inputs = torch.LongTensor(inputs)
-        segment_ids = torch.LongTensor(segment_ids)
-        attn_masks = torch.LongTensor(attn_masks)
-        labels = torch.LongTensor(labels)
-        head_ids = torch.LongTensor(head_ids)
-        relation_ids = torch.LongTensor(relation_ids)
-        tail_ids = torch.LongTensor(tail_ids)
-
-        return inputs, segment_ids, attn_masks, labels, head_ids, relation_ids, tail_ids
+        if self.negative_sample_size == 1:
+            p_i = torch.LongTensor(pos).unsqueeze(0)
+            p_s = torch.LongTensor(seg_pos).unsqueeze(0)
+            p_a = torch.LongTensor(mask_pos).unsqueeze(0)
+            n_i = torch.LongTensor(ids).unsqueeze(0)
+            n_s = torch.LongTensor(seg).unsqueeze(0)
+            n_a = torch.LongTensor(mask).unsqueeze(0)
+            labels = torch.FloatTensor(labels)
+            return p_i, p_s, p_a, n_i, n_s, n_a, labels
+        else:
+            inputs = torch.LongTensor(inputs)
+            segment_ids = torch.LongTensor(segment_ids)
+            attn_masks = torch.LongTensor(attn_masks)
+            labels = torch.LongTensor(labels)
+            head_ids = torch.LongTensor(head_ids)
+            relation_ids = torch.LongTensor(relation_ids)
+            tail_ids = torch.LongTensor(tail_ids)
+            return inputs, segment_ids, attn_masks, labels, head_ids, relation_ids, tail_ids
 
     @staticmethod
     def collate_fn_bert(data):
@@ -157,21 +166,14 @@ class BertTrainDataset(Dataset):
 
     @staticmethod
     def collate_fn_rr(data):
-        inputs = torch.cat([_[0] for _ in data], dim=0)
-        segment_ids = torch.cat([_[1] for _ in data], dim=0)
-        attn_masks = torch.cat([_[2] for _ in data], dim=0)
-        labels = torch.cat([_[3] for _ in data], dim=0)
-
-        _mask = (labels == 1)
-        in_ids1 = inputs[_mask]
-        in_ids2 = inputs[~_mask]
-        seg1 = segment_ids[_mask]
-        seg2 = segment_ids[~_mask]
-        attn1 = attn_masks[_mask]
-        attn2 = attn_masks[~_mask]
-
-        label_ids = labels.new_ones()  # labels should be 1 (margin ranking loss)
-        return in_ids1, attn1, seg1, in_ids2, attn2, seg2, label_ids
+        in_ids1 = torch.cat([_[0] for _ in data], dim=0)
+        seg1 = torch.cat([_[1] for _ in data], dim=0)
+        attn1 = torch.cat([_[2] for _ in data], dim=0)
+        in_ids2 = torch.cat([_[3] for _ in data], dim=0)
+        seg2 = torch.cat([_[4] for _ in data], dim=0)
+        attn2 = torch.cat([_[5] for _ in data], dim=0)
+        labels = torch.cat([_[6] for _ in data], dim=0)
+        return in_ids1, seg1, attn1, in_ids2, seg2, attn2, labels
 
 
     @staticmethod
