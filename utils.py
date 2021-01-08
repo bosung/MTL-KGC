@@ -196,15 +196,88 @@ class KGProcessor(object):
 
 class LPProcessor(KGProcessor):
     """Processor for the Link Prediction task."""
-    def __init__(self):
+    def __init__(self, data_dir):
         self.labels = set()
+        self._set_entities(data_dir)
+        self._set_relations(data_dir)
+
+    def _set_entities(self, data_dir):
+        with open(os.path.join(data_dir, "entities.txt"), 'r') as f:
+            entities = []
+            ent2id = {}
+            for i, line in enumerate(f.readlines()):
+                ent = line.strip()
+                entities.append(ent)
+                ent2id[ent] = i
+
+        if data_dir.find("FB15") != -1:
+            with open(os.path.join(data_dir, "entity2text.txt"), 'r') as f:
+                ent_lines = f.readlines()
+                for line in ent_lines:
+                    temp = line.strip().split('\t')
+                    # first_sent_end_position = temp[1].find(".")
+                    if temp[0] not in ent2id:
+                        i += 1
+                        ent2id[temp[0]] = i
+
+            with open(os.path.join(data_dir, "entity2textlong.txt"), 'r') as f:
+                ent_lines = f.readlines()
+                for line in ent_lines:
+                    temp = line.strip().split('\t')
+                    # first_sent_end_position = temp[1].find(".")
+                    if temp[0] not in ent2id:
+                        i += 1
+                        ent2id[temp[0]] = i
+
+        self.entities = entities
+        self.num_entity = len(entities)
+        self.ent2id = ent2id
+
+    def _set_relations(self, data_dir):
+        with open(os.path.join(data_dir, "relations.txt"), 'r') as f:
+            relations = []
+            rel2id = {}
+            for i, line in enumerate(f.readlines()):
+                rel = line.strip()
+                relations.append(rel)
+                rel2id[rel] = i
+        self.relations = relations
+        self.num_relation = len(relations)
+        self.rel2id = rel2id
 
     def get_labels(self, data_dir):
         """Gets all labels (0, 1) for triples in the knowledge graph."""
         return ["0", "1"]
 
-    def _create_examples(self, lines, set_type, data_dir):
-        """Creates examples for the training and dev sets."""
+    def get_entities(self, data_dir):
+        """Gets all entities in the knowledge graph."""
+        # return list(self.labels)
+        with open(os.path.join(data_dir, "entities.txt"), 'r') as f:
+            lines = f.readlines()
+            entities = []
+            for line in lines:
+                entities.append(line.strip())
+        return entities
+
+    def get_train_triples(self, data_dir, entity=False):
+        """Gets training triples."""
+        if entity:
+            return self._get_triples(os.path.join(data_dir, "train.tsv"), entity=True)
+        else:
+            return self._get_triples(os.path.join(data_dir, "train.tsv"))
+
+    def _get_triples(self, file_path, entity=False):
+        triples = []
+        with open(file_path) as f:
+            for line in f:
+                h, r, t = line.strip().split('\t')
+                if entity:
+                    triples.append([h, r, t])
+                else:
+                    triples.append((self.ent2id[h], self.rel2id[r], self.ent2id[t]))
+        return triples
+
+    def get_entity2text(self, data_dir):
         # entity to text
         ent2text = {}
         with open(os.path.join(data_dir, "entity2text.txt"), 'r') as f:
@@ -212,83 +285,52 @@ class LPProcessor(KGProcessor):
             for line in ent_lines:
                 temp = line.strip().split('\t')
                 if len(temp) == 2:
-                    end = temp[1]  #.find(',')
-                    ent2text[temp[0]] = temp[1]  #[:end]
-  
+                    end = temp[1]  # .find(',')
+                    ent2text[temp[0]] = temp[1]  # [:end]
+
         if data_dir.find("FB15") != -1:
             with open(os.path.join(data_dir, "entity2textlong.txt"), 'r') as f:
                 ent_lines = f.readlines()
                 for line in ent_lines:
                     temp = line.strip().split('\t')
-                    ent2text[temp[0]] = temp[1]  #[:first_sent_end_position + 1] 
+                    # first_sent_end_position = temp[1].find(".")
+                    #if temp[0] not in ent2text:
+                    ent2text[temp[0]] = temp[1]  # [:first_sent_end_position + 1]
+        return ent2text
 
-        entities = list(ent2text.keys())
-
+    def get_relation2text(self, data_dir):
         rel2text = {}
         with open(os.path.join(data_dir, "relation2text.txt"), 'r') as f:
-            rel_lines = f.readlines()
-            for line in rel_lines:
+            ent_lines = f.readlines()
+            for line in ent_lines:
                 temp = line.strip().split('\t')
-                rel2text[temp[0]] = temp[1]      
+                if len(temp) == 2:
+                    end = temp[1]  # .find(',')
+                    rel2text[temp[0]] = temp[1]  # [:end]
+        return rel2text
 
-        lines_str_set = set(['\t'.join(line) for line in lines])
-        examples = []
-        for (i, line) in enumerate(lines):
-            head_ent_text = ent2text[line[0]]
-            tail_ent_text = ent2text[line[2]]
-            relation_text = rel2text[line[1]]
+    def get_ent2input(self, data_dir, tokenizer, ent_max_len=128):
+        ent2text = self.get_entity2text(data_dir)
+        ent2input = {}
+        for e in ent2text:
+            e_id = self.ent2id[e]
+            text = ent2text[e]
+            tokens = tokenizer.tokenize(text)
+            input_ids = tokenizer.convert_tokens_to_ids(tokens)
+            ent2input[e_id] = input_ids[:ent_max_len]
+        return ent2input  # for max_len
 
-            if set_type == "dev" or set_type == "test":
-                label = "1"
-                guid = "%s-%s" % (set_type, i)
-                text_a = head_ent_text
-                text_b = relation_text
-                text_c = tail_ent_text 
-                self.labels.add(label)
-                examples.append(
-                    InputExample(guid=guid, text_a=text_a, text_b=text_b, text_c = text_c, label=label))
-                
-            elif set_type == "train":
-                guid = "%s-%s" % (set_type, i)
-                text_a = head_ent_text
-                text_b = relation_text
-                text_c = tail_ent_text 
-                examples.append(
-                    InputExample(guid=guid, text_a=text_a, text_b=text_b, text_c = text_c, label="1"))
+    def get_rel2input(self, data_dir, tokenizer):
+        rel2text = self.get_relation2text(data_dir)
+        rel2input = {}
+        for rel in rel2text:
+            r_id = self.rel2id[rel]
+            text = rel
+            tokens = tokenizer.tokenize(text)
+            input_ids = tokenizer.convert_tokens_to_ids(tokens)
+            rel2input[r_id] = input_ids
+        return rel2input
 
-                rnd = random.random()
-                guid = "%s-%s" % (set_type + "_corrupt", i)
-                if rnd <= 0.5:
-                    # corrupting head
-                    for j in range(5):
-                        tmp_head = ''
-                        while True:
-                            tmp_ent_list = set(entities)
-                            tmp_ent_list.remove(line[0])
-                            tmp_ent_list = list(tmp_ent_list)
-                            tmp_head = random.choice(tmp_ent_list)
-                            tmp_triple_str = tmp_head + '\t' + line[1] + '\t' + line[2]
-                            if tmp_triple_str not in lines_str_set:
-                                break                    
-                        tmp_head_text = ent2text[tmp_head]
-                        examples.append(
-                            InputExample(guid=guid, text_a=tmp_head_text, text_b=text_b, text_c = text_c, label="0"))       
-                else:
-                    # corrupting tail
-                    tmp_tail = ''
-                    for j in range(5):
-                        while True:
-                            tmp_ent_list = set(entities)
-                            tmp_ent_list.remove(line[2])
-                            tmp_ent_list = list(tmp_ent_list)
-                            tmp_tail = random.choice(tmp_ent_list)
-                            tmp_triple_str = line[0] + '\t' + line[1] + '\t' + tmp_tail
-                            if tmp_triple_str not in lines_str_set:
-                                break
-                        tmp_tail_text = ent2text[tmp_tail]
-                        examples.append(
-                            InputExample(guid=guid, text_a=text_a, text_b=text_b, text_c = tmp_tail_text, label="0"))                                                  
-        return examples
 
 
 def lp_convert_examples_to_features(examples, label_list, max_seq_length, tokenizer, print_info = True):
@@ -734,177 +776,3 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
             tokens_a.pop()
         else:
             tokens_b.pop()
-
-
-class BertTrainDataset(Dataset):
-    def __init__(self, triples, ent2input, rel2input, max_len, nentity, nrelation, negative_sample_size, mode):
-        self.len = len(triples)
-        self.triples = triples
-        self.triple_set = set(triples)
-        self.nentity = nentity
-        self.nrelation = nrelation
-        self.negative_sample_size = negative_sample_size
-        self.mode = mode
-        self.count = self.count_frequency(triples)
-        self.true_head, self.true_tail = self.get_true_head_and_tail(self.triples)
-        self.ent2input = ent2input
-        self.rel2input = rel2input
-        self.max_len = max_len
-
-    def __convert_triple_to_bert_input(self, h, r, t):
-        CLS, SEP = [101], [102]
-
-        head = CLS + self.ent2input[h] + SEP
-        seg_head = [0] * len(head)
-        rel = self.rel2input[r] + SEP
-        seg_rel = [1] * len(rel)
-        tail = self.ent2input[t] + SEP
-        seg_tail = [0] * len(tail)
-
-        pos = head + rel + tail
-        seg_pos = seg_head + seg_rel + seg_tail
-        mask_pos = [1] * len(pos)
-
-        padding = [0] * (self.max_len - len(pos))
-        pos += padding
-        seg_pos += padding
-        mask_pos += padding
-
-        return pos[:self.max_len], seg_pos[:self.max_len], mask_pos[:self.max_len]
-
-    def __len__(self):
-        return self.len
-
-    def __getitem__(self, idx):
-        inputs, segment_ids, attn_masks = [], [], []
-        labels = []
-        head_ids, relation_ids, tail_ids = [], [], []
-        head, relation, tail = self.triples[idx]  # true triple
-        pos, seg_pos, mask_pos = self.__convert_triple_to_bert_input(head, relation, tail)
-        inputs.append(pos)
-        segment_ids.append(seg_pos)
-        attn_masks.append(mask_pos)
-        labels.append(1)
-        head_ids.append(head)
-        relation_ids.append(relation)
-        tail_ids.append(tail)
-
-        #subsampling_weight = self.count[(head, relation)] + self.count[(tail, -relation - 1)]
-        #subsampling_weight = torch.sqrt(1 / torch.Tensor([subsampling_weight]))
-
-        negative_sample_list = []
-        negative_sample_size = 0
-
-        while negative_sample_size < self.negative_sample_size:
-            negative_sample = np.random.randint(self.nentity, size=self.negative_sample_size * 2)
-            if self.mode == 'head-batch':
-                mask = np.in1d(
-                    negative_sample,
-                    self.true_head[(relation, tail)],
-                    assume_unique=True,
-                    invert=True
-                )
-            elif self.mode == 'tail-batch':
-                mask = np.in1d(
-                    negative_sample,
-                    self.true_tail[(head, relation)],
-                    assume_unique=True,
-                    invert=True
-                )
-            else:
-                raise ValueError('Training batch mode %s not supported' % self.mode)
-            negative_sample = negative_sample[mask]
-            negative_sample_list.append(negative_sample)
-            negative_sample_size += negative_sample.size
-
-        negative_sample = np.concatenate(negative_sample_list)[:self.negative_sample_size]
-        for neg in negative_sample:
-            if self.mode == 'head-batch':
-                ids, seg, mask = self.__convert_triple_to_bert_input(neg, relation, tail)
-                head_ids.append(neg)
-                relation_ids.append(relation)
-                tail_ids.append(tail)
-            elif self.mode == 'tail-batch':
-                ids, seg, mask = self.__convert_triple_to_bert_input(head, relation, neg)
-                head_ids.append(head)
-                relation_ids.append(relation)
-                tail_ids.append(neg)
-            else:
-                raise ValueError('Training batch mode %s not supported' % self.mode)
-            inputs.append(ids)
-            segment_ids.append(seg)
-            attn_masks.append(mask)
-            labels.append(0)
-
-        inputs = torch.LongTensor(inputs)
-        segment_ids = torch.LongTensor(segment_ids)
-        attn_masks = torch.LongTensor(attn_masks)
-        labels = torch.LongTensor(labels)
-        head_ids = torch.LongTensor(head_ids)
-        relation_ids = torch.LongTensor(relation_ids)
-        tail_ids = torch.LongTensor(tail_ids)
-
-        return inputs, segment_ids, attn_masks, labels, head_ids, relation_ids, tail_ids
-
-    @staticmethod
-    def collate_fn_bert(data):
-        inputs = torch.cat([_[0] for _ in data], dim=0)
-        segment_ids = torch.cat([_[1] for _ in data], dim=0)
-        attn_masks = torch.cat([_[2] for _ in data], dim=0)
-        labels = torch.cat([_[3] for _ in data], dim=0)
-        return inputs, segment_ids, attn_masks, labels
-
-    @staticmethod
-    def collate_fn_full(data):
-        inputs = torch.cat([_[0] for _ in data], dim=0)
-        segment_ids = torch.cat([_[1] for _ in data], dim=0)
-        attn_masks = torch.cat([_[2] for _ in data], dim=0)
-        labels = torch.cat([_[3] for _ in data], dim=0)
-        head_ids = torch.cat([_[4] for _ in data], dim=0)
-        relation_ids = torch.cat([_[5] for _ in data], dim=0)
-        tail_ids = torch.cat([_[6] for _ in data], dim=0)
-        return inputs, segment_ids, attn_masks, labels, head_ids, relation_ids, tail_ids
-
-    @staticmethod
-    def get_true_head_and_tail(triples):
-        '''
-        Build a dictionary of true triples that will
-        be used to filter these true triples for negative sampling
-        '''
-
-        true_head = {}
-        true_tail = {}
-
-        for head, relation, tail in triples:
-            if (head, relation) not in true_tail:
-                true_tail[(head, relation)] = []
-            true_tail[(head, relation)].append(tail)
-            if (relation, tail) not in true_head:
-                true_head[(relation, tail)] = []
-            true_head[(relation, tail)].append(head)
-
-        for relation, tail in true_head:
-            true_head[(relation, tail)] = np.array(list(set(true_head[(relation, tail)])))
-        for head, relation in true_tail:
-            true_tail[(head, relation)] = np.array(list(set(true_tail[(head, relation)])))
-
-        return true_head, true_tail
-
-    @staticmethod
-    def count_frequency(triples, start=4):
-        '''
-        Get frequency of a partial triple like (head, relation) or (relation, tail)
-        The frequency will be used for subsampling like word2vec
-        '''
-        count = {}
-        for head, relation, tail in triples:
-            if (head, relation) not in count:
-                count[(head, relation)] = start
-            else:
-                count[(head, relation)] += 1
-
-            if (tail, -relation - 1) not in count:
-                count[(tail, -relation - 1)] = start
-            else:
-                count[(tail, -relation - 1)] += 1
-        return count

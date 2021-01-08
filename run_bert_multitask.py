@@ -21,7 +21,7 @@ import logging
 import random
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset)
+                              TensorDataset, ConcatDataset)
 from tqdm import tqdm, trange
 
 from torch.nn import CrossEntropyLoss, MarginRankingLoss
@@ -30,6 +30,7 @@ from pytorch_pretrained_bert.file_utils import WEIGHTS_NAME, CONFIG_NAME
 from transformers import AdamW, BertTokenizer, BertConfig
 from models import BertForSequenceClassification
 from utils import *
+from dataloaders import BidirectionalOneShotIterator, BertTrainDataset
 from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
@@ -222,24 +223,23 @@ def main():
     tr_loss = 0
     if args.do_train:
         task_total_dataset = dict()
-        if "lp" in task_list:
-            # load link prediction data
-            train_bin_path = os.path.join(args.data_dir, 'train-lp.pt')
-            if os.path.exists(train_bin_path):
-                lp_train_data = torch.load(train_bin_path)
-                logger.info("load %s" % train_bin_path)
-            else:
-                lp_train_examples = lp_processor.get_train_examples(args.data_dir)
-                lp_train_features = lp_convert_examples_to_features(
-                    lp_train_examples, lp_label_list, args.max_seq_length, tokenizer)
-                all_input_ids = torch.tensor([f.input_ids for f in lp_train_features], dtype=torch.long)
-                all_input_mask = torch.tensor([f.input_mask for f in lp_train_features], dtype=torch.long)
-                all_segment_ids = torch.tensor([f.segment_ids for f in lp_train_features], dtype=torch.long)
-                all_label_ids = torch.tensor([f.label_id for f in lp_train_features], dtype=torch.long)
-                lp_train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-                torch.save(lp_train_data, train_bin_path)
-            task_total_dataset["lp"] = lp_train_data
-            logger.info("  [Link Prediction] Num examples = %d", len(lp_train_data))
+        train_dataloader = {}
+        if "lp" in task_list:  # load link prediction data
+            train_triples = lp_processor.get_train_triples(args.data_dir)
+            ent2input = lp_processor.get_ent2input(args.data_dir, tokenizer)
+            rel2input = lp_processor.get_rel2input(args.data_dir, tokenizer)
+
+            head_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
+                                       lp_processor.num_relation, args.negative_sample_size, 'head-batch')
+            tail_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
+                                       lp_processor.num_relation, args.negative_sample_size, 'tail-batch')
+            task_total_dataset["lp"] = ConcatDataset([head_ds, tail_ds])
+            lp_train_dataloader = DataLoader(task_total_dataset["lp"],
+                                             batch_size=args.train_batch_size,
+                                             shuffle=True,
+                                             collate_fn=BertTrainDataset.collate_fn_bert)
+            train_dataloader["lp"] = lp_train_dataloader
+            logger.info("  [Link Prediction] Num examples = %d", len(task_total_dataset["lp"]))
         if "rp" in task_list:
             # load relation prediction data
             train_bin_path = os.path.join(args.data_dir, 'train-rp.pt')
@@ -260,29 +260,16 @@ def main():
             task_total_dataset["rp"] = rp_train_data
             logger.info("  [Relation Prediction] Num examples = %d", len(rp_train_data))
         if "rr" in task_list:
-            # load margin rank data
-            train_bin_path = os.path.join(args.data_dir, 'train-mr.pt')
-            if os.path.exists(train_bin_path):
-                mr_train_data = torch.load(train_bin_path)
-                logger.info("load %s" % train_bin_path)
-            else:
-                mr_train_examples = rr_processor.get_train_examples(args.data_dir)
-                train_features = rr_convert_examples_to_features(
-                    mr_train_examples, rr_label_list, args.max_seq_length, tokenizer)
-                logger.info("***** Running training *****")
-                logger.info("  Num examples = %d", len(mr_train_examples))
-                all_input_ids1 = torch.tensor([f.input_ids1 for f in train_features], dtype=torch.long)
-                all_input_mask1 = torch.tensor([f.input_mask1 for f in train_features], dtype=torch.long)
-                all_segment_ids1 = torch.tensor([f.segment_ids1 for f in train_features], dtype=torch.long)
-                all_input_ids2 = torch.tensor([f.input_ids2 for f in train_features], dtype=torch.long)
-                all_input_mask2 = torch.tensor([f.input_mask2 for f in train_features], dtype=torch.long)
-                all_segment_ids2 = torch.tensor([f.segment_ids2 for f in train_features], dtype=torch.long)
-                all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.float)
-                mr_train_data = TensorDataset(all_input_ids1, all_input_mask1, all_segment_ids1,
-                                              all_input_ids2, all_input_mask2, all_segment_ids2, all_label_ids)
-                torch.save(mr_train_data, train_bin_path)
-            task_total_dataset["mr"] = mr_train_data
-            logger.info("  [Margin Rank] Num examples = %d", len(mr_train_data))
+            head_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
+                                       lp_processor.num_relation, 1, 'head-batch')
+            tail_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
+                                       lp_processor.num_relation, 1, 'tail-batch')
+            task_total_dataset["rr"] = ConcatDataset([head_ds, tail_ds])
+            rr_train_dataloader = DataLoader(task_total_dataset["rr"],
+                                             batch_size=args.train_batch_size,
+                                             shuffle=True, collate_fn=BertTrainDataset.collate_fn_rr)
+            train_dataloader["rr"] = rr_train_dataloader
+            logger.info("  [Margin Rank] Num examples = %d", len(task_total_dataset["rr"]))
 
         # get train loaders
         train_dataloader = {}
@@ -291,7 +278,7 @@ def main():
                                                 sampler=RandomSampler(task_total_dataset[task]),
                                                 batch_size=args.train_batch_size)
         batch_nums = {task: len(train_dataloader[task]) for task in task_total_dataset}
-        task_total_batch_num = sum([batch_nums[k] for k in batch_nums])
+        #task_total_batch_num = sum([batch_nums[k] for k in batch_nums])
 
         # set batch order
         order = order_selection([task for task in task_total_dataset], batch_nums)
