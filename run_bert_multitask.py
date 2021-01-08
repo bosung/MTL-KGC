@@ -21,7 +21,7 @@ import logging
 import random
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset, ConcatDataset)
+                              TensorDataset, ConcatDataset, DistributedSampler)
 from tqdm import tqdm, trange
 
 from torch.nn import CrossEntropyLoss, MarginRankingLoss
@@ -32,8 +32,32 @@ from models import BertForSequenceClassification
 from utils import *
 from dataloaders import BidirectionalOneShotIterator, BertTrainDataset
 from torch.utils.tensorboard import SummaryWriter
+from packaging import version
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    from apex import amp  # noqa: F401
+    _has_apex = True
+except ImportError:
+    _has_apex = False
+
+_use_native_amp = False
+_use_apex = False
+
+
+def is_apex_available():
+    return _has_apex
+
+
+# Check if Pytorch version >= 1.6 to switch between Native AMP and Apex
+if version.parse(torch.__version__) < version.parse("1.6"):
+    if is_apex_available():
+        from apex import amp
+    _use_apex = True
+else:
+    _use_native_amp = True
 
 
 def main():
@@ -134,6 +158,7 @@ def main():
     parser.add_argument('--margin', type=float, default=0.1)
     parser.add_argument('--debug_index', type=int, default=0)
     parser.add_argument('--negative_sample_size', type=int, default=10)
+    parser.add_argument('--max_grad_norm', type=float, default=1.0)
     args = parser.parse_args()
 
     summary = SummaryWriter(log_dir=args.tb_log_dir)
@@ -146,13 +171,12 @@ def main():
         ptvsd.enable_attach(address=(args.server_ip, args.server_port), redirect_output=True)
         ptvsd.wait_for_attach()
 
+    n_gpu = torch.cuda.device_count()
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        n_gpu = torch.cuda.device_count()
     else:
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
-        n_gpu = 1
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.distributed.init_process_group(backend='nccl')
 
@@ -183,13 +207,11 @@ def main():
 
     lp_processor = LPProcessor(args.data_dir)
     rp_processor = RPProcessor()
-    rr_processor = RRProcessor()
 
     lp_label_list = lp_processor.get_labels(args.data_dir)
     lp_num_labels = len(lp_label_list)
     rp_label_list = rp_processor.get_labels(args.data_dir)
     rp_num_labels = len(rp_label_list)
-    rr_label_list = rr_processor.get_labels(args.data_dir)
 
     entity_list = lp_processor.get_entities(args.data_dir)
 
@@ -201,23 +223,29 @@ def main():
     setattr(config, "rp_num_labels", rp_num_labels)
     model = BertForSequenceClassification.from_pretrained(args.bert_model, config=config)
     model.to(device)
-    if args.local_rank != -1:
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
 
-        model = DDP(model)
-    elif n_gpu > 1:
-        model = torch.nn.DataParallel(model)
     # Prepare optimizer
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
     optimizer_grouped_parameters = [
         {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
         {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
+    ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
+
+    if args.fp16:
+        if not is_apex_available():
+            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
+        model, optimizer = amp.initialize(model, optimizer)
+
+    # Distributed training (should be after apex fp16 initialization)
+    if args.local_rank != -1:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[args.local_rank],
+            output_device=args.local_rank,
+            find_unused_parameters=True,
+        )
 
     global_step = 0
     nb_tr_steps = 0
@@ -235,9 +263,10 @@ def main():
             tail_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
                                        lp_processor.num_relation, args.negative_sample_size, 'tail-batch')
             task_total_dataset["lp"] = ConcatDataset([head_ds, tail_ds])
+            sampler = DistributedSampler(task_total_dataset["lp"])
             lp_train_dataloader = DataLoader(task_total_dataset["lp"],
                                              batch_size=args.train_batch_size,
-                                             shuffle=True,
+                                             sampler=sampler,
                                              collate_fn=BertTrainDataset.collate_fn_bert)
             train_dataloader["lp"] = lp_train_dataloader
             logger.info("  [Link Prediction] Num examples = %d", len(task_total_dataset["lp"]))
@@ -256,12 +285,12 @@ def main():
                 all_input_mask = torch.tensor([f.input_mask for f in rp_train_features], dtype=torch.long)
                 all_segment_ids = torch.tensor([f.segment_ids for f in rp_train_features], dtype=torch.long)
                 all_label_ids = torch.tensor([f.label_id for f in rp_train_features], dtype=torch.long)
-                rp_train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+                rp_train_data = TensorDataset(all_input_ids, all_segment_ids, all_input_mask, all_label_ids)
                 torch.save(rp_train_data, train_bin_path)
             task_total_dataset["rp"] = rp_train_data
+            sampler = DistributedSampler(task_total_dataset["rp"])
             train_dataloader["rp"] = DataLoader(task_total_dataset["rp"],
-                                                batch_size=args.train_batch_size,
-                                                shuffle=True, collate_fn=BertTrainDataset.collate_fn_bert)
+                                                batch_size=args.train_batch_size, sampler=sampler)
             logger.info("  [Relation Prediction] Num examples = %d", len(rp_train_data))
         if "rr" in task_list:
             head_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
@@ -269,9 +298,10 @@ def main():
             tail_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
                                        lp_processor.num_relation, 1, 'tail-batch')
             task_total_dataset["rr"] = ConcatDataset([head_ds, tail_ds])
+            sampler = DistributedSampler(task_total_dataset["rr"])
             rr_train_dataloader = DataLoader(task_total_dataset["rr"],
-                                             batch_size=args.train_batch_size,
-                                             shuffle=True, collate_fn=BertTrainDataset.collate_fn_rr)
+                                             batch_size=args.train_batch_size, sampler=sampler,
+                                             collate_fn=BertTrainDataset.collate_fn_rr)
             train_dataloader["rr"] = rr_train_dataloader
             logger.info("  [Margin Rank] Num examples = %d", len(task_total_dataset["rr"]))
 
@@ -284,6 +314,9 @@ def main():
         # set recoders
         loss_recoder = {task: .0 for task in task_total_dataset}
 
+        if args.fp16 and _use_native_amp:
+            scaler = torch.cuda.amp.GradScaler()
+
         model.train()
         for k in trange(int(args.num_train_epochs), desc="Epoch"):
             tr_loss = {task: .0 for task in task_total_dataset}
@@ -295,8 +328,9 @@ def main():
                 batch_some_task = next(task_iterators[cur_batch_task])
 
                 if cur_batch_task in ["lp", "rp"]:
-                    input_ids, input_mask, segment_ids, label_ids = tuple(t.to(device) for t in batch_some_task)
-                    logits = model(input_ids, segment_ids, input_mask, task=cur_batch_task)
+                    input_ids, segment_ids, input_mask, label_ids = tuple(t.to(device) for t in batch_some_task)
+                    logits = model(input_ids, token_type_ids=segment_ids,
+                                   attention_mask=input_mask, task=cur_batch_task)
                     loss_fct = CrossEntropyLoss()
                     if cur_batch_task == "lp":
                         loss = loss_fct(logits.view(-1, lp_num_labels), label_ids.view(-1))
@@ -306,34 +340,51 @@ def main():
                         loss = loss * 1
                 elif cur_batch_task in ["rr"]:
                     batch = tuple(t.to(device) for t in batch_some_task)
-                    input_ids1, input_mask1, segment_ids1, input_ids2, input_mask2, segment_ids2, label_ids = batch
-                    logits1 = model(input_ids=input_ids1, token_type_ids=segment_ids1,
-                                    attention_mask=input_mask1, task=cur_batch_task)
-                    logits2 = model(input_ids=input_ids2, token_type_ids=segment_ids2,
-                                    attention_mask=input_mask2, task=cur_batch_task)
+                    input_ids1, seg1, mask1, input_ids2, seg2, mask2, label_ids = batch
+                    logits1, logits2 = model(input_ids=input_ids1, token_type_ids=seg1, attention_mask=mask1, task=cur_batch_task,
+                                             input_ids2=input_ids2, token_type_ids2=seg2, attention_mask2=mask2)
                     loss_fct = MarginRankingLoss(margin=args.margin)
+                    label_ids = label_ids.new_ones(label_ids.size()).detach()
                     loss = loss_fct(logits1, logits2, label_ids.view(-1))
                     loss = loss * 1
                 else:
                     raise TypeError
 
                 if n_gpu > 1:
-                    loss = loss.mean() # mean() to average on multi-gpu.
+                    loss = loss.mean()  # mean() to average on multi-gpu.
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
 
-                if args.fp16:
-                    optimizer.backward(loss)
+                optimizer.zero_grad()
+
+                # backward
+                if args.fp16 and _use_native_amp:
+                    scaler.scale(loss).backward()
+                elif args.fp16 and _use_apex:
+                    with amp.scale_loss(loss, optimizer) as scaled_loss:
+                        scaled_loss.backward()
                 else:
                     loss.backward()
+                # clip grad norm
+                if args.fp16 and _use_native_amp:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                elif args.fp16 and _use_apex:
+                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                # step
+                if args.fp16 and _use_native_amp:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
 
                 tr_loss[cur_batch_task] += loss.item()
                 loss_recoder[cur_batch_task] += loss.item()
                 nb_tr_examples[cur_batch_task] += label_ids.size(0)
                 nb_tr_steps += 1
                 if (step + 1) % args.gradient_accumulation_steps == 0:
-                    optimizer.step()
-                    optimizer.zero_grad()
                     global_step += 1
                 summary.add_scalar('%s_training_loss' % cur_batch_task, loss.item(), global_step)
             # end of epoch
