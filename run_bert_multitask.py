@@ -419,9 +419,9 @@ def main():
 
     if args.do_predict and (args.local_rank == -1 or torch.distributed.get_rank() == 0) and args.eval_task == "lp":
         # evaluate Link Prediction task
-        train_triples = lp_processor.get_train_triples(args.data_dir)
-        dev_triples = lp_processor.get_dev_triples(args.data_dir)
-        test_triples = lp_processor.get_test_triples(args.data_dir)
+        train_triples = lp_processor.get_train_triples(args.data_dir, entity=True)
+        dev_triples = lp_processor.get_dev_triples(args.data_dir, entity=True)
+        test_triples = lp_processor.get_test_triples(args.data_dir, entity=True)
         all_triples = train_triples + dev_triples + test_triples
 
         all_triples_str_set = set()
@@ -460,7 +460,7 @@ def main():
             label_ids = label_ids.to(device)
 
             with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, labels=None, task="lp")
+                logits = model(input_ids, segment_ids, input_mask, task="lp")
 
             loss_fct = CrossEntropyLoss()
             tmp_eval_loss = loss_fct(logits.view(-1, lp_num_labels), label_ids.view(-1))
@@ -481,7 +481,7 @@ def main():
 
         preds = np.argmax(preds, axis=1)
 
-        result = compute_metrics("kg", preds, all_label_ids)
+        result = compute_metrics("lp", preds, all_label_ids)
 
         result['eval_loss'] = eval_loss
         result['global_step'] = global_step
@@ -562,7 +562,7 @@ def main():
                 # label_ids = label_ids.to(device)
                 
                 with torch.no_grad():
-                    logits = model(input_ids, segment_ids, input_mask, labels=None, task="lp")
+                    logits = model(input_ids, segment_ids, input_mask, task="lp")
                 if len(preds) == 0:
                     batch_logits = logits.detach().cpu().numpy()
                     preds.append(batch_logits)
@@ -599,7 +599,7 @@ def main():
                 # label_ids = label_ids.to(device)
 
                 with torch.no_grad():
-                    logits = model(input_ids, segment_ids, input_mask, labels=None, task="lp")
+                    logits = model(input_ids, segment_ids, input_mask, task="lp")
                 if len(preds) == 0:
                     batch_logits = logits.detach().cpu().numpy()
                     preds.append(batch_logits)
@@ -696,7 +696,7 @@ def main():
             label_ids = label_ids.to(device)
 
             with torch.no_grad():
-                outputs = model(input_ids, segment_ids, input_mask, labels=None, task="rp")
+                outputs = model(input_ids, segment_ids, input_mask, task="rp")
                 logits = outputs[0]  # if labels is None, outputs = (logits, hidden_states, attentions)
 
             loss_fct = CrossEntropyLoss()
@@ -761,7 +761,7 @@ def main():
             print('hits_filter Hits @{0}: {1}'.format(i + 1, np.mean(hits_filter[i])))
         preds = np.argmax(preds, axis=1)
 
-        result = compute_metrics("kg", preds, all_label_ids)
+        result = compute_metrics("lp", preds, all_label_ids)
         loss = tr_loss / nb_tr_steps if args.do_train else None
 
         result['eval_loss'] = eval_loss
@@ -857,7 +857,7 @@ def main():
             segment_ids = segment_ids.to(device)
 
             with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, labels=None, task="lp")
+                logits = model(input_ids, segment_ids, input_mask, task="lp")
             if len(preds) == 0:
                 batch_logits = logits.detach().cpu().numpy()
                 preds.append(batch_logits)

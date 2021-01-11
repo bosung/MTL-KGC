@@ -3,9 +3,7 @@ import sys
 import os
 import numpy as np
 import random
-import torch
 import logging
-from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +77,7 @@ def _truncate_seq_triple(tokens_a, tokens_b, tokens_c, max_length):
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
 
-    def __init__(self, guid, text_a, text_b=None, label=None):
+    def __init__(self, guid, text_a, text_b=None, text_c=None, label=None):
         """Constructs a InputExample.
 
         Args:
@@ -94,6 +92,7 @@ class InputExample(object):
         self.guid = guid
         self.text_a = text_a
         self.text_b = text_b
+        self.text_c = text_c
         self.label = label
 
 
@@ -129,10 +128,57 @@ class KGProcessor(object):
         """Gets the list of labels for this data set."""
         raise NotImplementedError()
 
-    def _create_examples(self, data):
-        """Gets the list of labels for this data set."""
-        raise NotImplementedError()
-        
+    def _create_examples(self, lines, set_type, data_dir):
+        """Creates examples for the training and dev sets."""
+        # entity to text
+        ent2text = {}
+        with open(os.path.join(data_dir, "entity2text.txt"), 'r') as f:
+            ent_lines = f.readlines()
+            for line in ent_lines:
+                temp = line.strip().split('\t')
+                if len(temp) == 2:
+                    end = temp[1]  # .find(',')
+                    ent2text[temp[0]] = temp[1]  # [:end]
+
+        if data_dir.find("FB15") != -1:
+            with open(os.path.join(data_dir, "entity2textlong.txt"), 'r') as f:
+                ent_lines = f.readlines()
+                for line in ent_lines:
+                    temp = line.strip().split('\t')
+                    # first_sent_end_position = temp[1].find(".")
+                    ent2text[temp[0]] = temp[1]  # [:first_sent_end_position + 1]
+
+        entities = list(ent2text.keys())
+
+        rel2text = {}
+        with open(os.path.join(data_dir, "relation2text.txt"), 'r') as f:
+            rel_lines = f.readlines()
+            for line in rel_lines:
+                temp = line.strip().split('\t')
+                rel2text[temp[0]] = temp[1]
+
+        lines_str_set = set(['\t'.join(line) for line in lines])
+        examples = []
+        for (i, line) in enumerate(lines):
+            head_ent_text = ent2text[line[0]]
+            tail_ent_text = ent2text[line[2]]
+            relation_text = rel2text[line[1]]
+
+            if set_type == "dev" or set_type == "test":
+
+                label = "1"
+
+                guid = "%s-%s" % (set_type, i)
+                text_a = head_ent_text
+                text_b = relation_text
+                text_c = tail_ent_text
+                self.labels.add(label)
+                examples.append(
+                    InputExample(guid=guid, text_a=text_a, text_b=text_b, text_c=text_c, label=label))
+            else:
+                raise ValueError("Wrong type!")
+        return examples
+
     @classmethod
     def get_entities(self, data_dir):
         """Gets all entities in the knowledge graph."""
@@ -266,6 +312,20 @@ class LPProcessor(KGProcessor):
         else:
             return self._get_triples(os.path.join(data_dir, "train.tsv"))
 
+    def get_dev_triples(self, data_dir, entity=False):
+        """Gets training triples."""
+        if entity:
+            return self._get_triples(os.path.join(data_dir, "dev.tsv"), entity=True)
+        else:
+            return self._get_triples(os.path.join(data_dir, "dev.tsv"))
+
+    def get_test_triples(self, data_dir, entity=False):
+        """Gets training triples."""
+        if entity:
+            return self._get_triples(os.path.join(data_dir, "test.tsv"), entity=True)
+        else:
+            return self._get_triples(os.path.join(data_dir, "test.tsv"))
+
     def _get_triples(self, file_path, entity=False):
         triples = []
         with open(file_path) as f:
@@ -330,7 +390,6 @@ class LPProcessor(KGProcessor):
             input_ids = tokenizer.convert_tokens_to_ids(tokens)
             rel2input[r_id] = input_ids
         return rel2input
-
 
 
 def lp_convert_examples_to_features(examples, label_list, max_seq_length, tokenizer, print_info = True):
