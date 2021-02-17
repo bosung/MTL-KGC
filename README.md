@@ -4,6 +4,7 @@ This is PyTorch implementation of the [Multi-Task Learning for Knowledge Graph C
 **Train**
 
 Train multitask learning with link prediction (LP), relation prediction (RP), and relevance ranking (RR).
+if you get **AssertionError: Default process group is not initialized**, please try with **python -m torch.distributed.launch**
 ```
 python run_bert_multitask.py \
     --do_train \
