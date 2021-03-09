@@ -34,7 +34,7 @@ python run_bert_multitask.py \
 **Evaulation**
 ```
 python run_bert_multitask.py \
-    --do_eval \
+    --do_predict \
     --data_dir ./data/wn18rr \
     --bert_model {test_model} \
     --max_seq_length 128 \
