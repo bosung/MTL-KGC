@@ -21,21 +21,21 @@ import logging
 import random
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
-                              TensorDataset, ConcatDataset, DistributedSampler)
+                              TensorDataset, ConcatDataset)
 from tqdm import tqdm, trange
 
 from torch.nn import CrossEntropyLoss, MarginRankingLoss
 from sklearn import metrics
-from pytorch_pretrained_bert.file_utils import WEIGHTS_NAME, CONFIG_NAME
 from transformers import AdamW, BertTokenizer, BertConfig
 from models import BertForSequenceClassification
 from utils import *
 from dataloaders import BidirectionalOneShotIterator, BertTrainDataset
-from torch.utils.tensorboard import SummaryWriter
 from packaging import version
 
 logger = logging.getLogger(__name__)
 
+WEIGHTS_NAME = 'pytorch_model.bin'
+CONFIG_NAME = 'config.json'
 
 try:
     from apex import amp  # noqa: F401
@@ -154,14 +154,12 @@ def main():
     parser.add_argument('--server_port', type=str, default='', help="Can be used for distant debugging.")
     parser.add_argument('--eval_range', type=str, default='1:500')
     parser.add_argument('--eval_task', type=str, default="lp", choices=["lp", "rp"])
-    parser.add_argument('--tb_log_dir', type=str, default="runs/null")
     parser.add_argument('--margin', type=float, default=0.1)
     parser.add_argument('--debug_index', type=int, default=0)
     parser.add_argument('--negative_sample_size', type=int, default=10)
     parser.add_argument('--max_grad_norm', type=float, default=1.0)
     args = parser.parse_args()
 
-    summary = SummaryWriter(log_dir=args.tb_log_dir)
     task_list = args.task_list.split(",")
 
     if args.server_ip and args.server_port:
@@ -263,7 +261,7 @@ def main():
             tail_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
                                        lp_processor.num_relation, args.negative_sample_size, 'tail-batch')
             task_total_dataset["lp"] = ConcatDataset([head_ds, tail_ds])
-            sampler = DistributedSampler(task_total_dataset["lp"])
+            sampler = RandomSampler(task_total_dataset["lp"])
             lp_train_dataloader = DataLoader(task_total_dataset["lp"],
                                              batch_size=args.train_batch_size,
                                              sampler=sampler,
@@ -288,7 +286,7 @@ def main():
                 rp_train_data = TensorDataset(all_input_ids, all_segment_ids, all_input_mask, all_label_ids)
                 torch.save(rp_train_data, train_bin_path)
             task_total_dataset["rp"] = rp_train_data
-            sampler = DistributedSampler(task_total_dataset["rp"])
+            sampler = RandomSampler(task_total_dataset["rp"])
             train_dataloader["rp"] = DataLoader(task_total_dataset["rp"],
                                                 batch_size=args.train_batch_size, sampler=sampler)
             logger.info("  [Relation Prediction] Num examples = %d", len(rp_train_data))
@@ -298,7 +296,7 @@ def main():
             tail_ds = BertTrainDataset(train_triples, ent2input, rel2input, args.max_seq_length, lp_processor.num_entity,
                                        lp_processor.num_relation, 1, 'tail-batch')
             task_total_dataset["rr"] = ConcatDataset([head_ds, tail_ds])
-            sampler = DistributedSampler(task_total_dataset["rr"])
+            sampler = RandomSampler(task_total_dataset["rr"])
             rr_train_dataloader = DataLoader(task_total_dataset["rr"],
                                              batch_size=args.train_batch_size, sampler=sampler,
                                              collate_fn=BertTrainDataset.collate_fn_rr)
@@ -344,8 +342,8 @@ def main():
                     logits1, logits2 = model(input_ids=input_ids1, token_type_ids=seg1, attention_mask=mask1, task=cur_batch_task,
                                              input_ids2=input_ids2, token_type_ids2=seg2, attention_mask2=mask2)
                     loss_fct = MarginRankingLoss(margin=args.margin)
-                    label_ids = label_ids.new_ones(label_ids.size()).detach()
-                    loss = loss_fct(logits1, logits2, label_ids.view(-1))
+                    label_ids = label_ids.new_ones(logits1.size()).detach()
+                    loss = loss_fct(logits1, logits2, label_ids)
                     loss = loss * 1
                 else:
                     raise TypeError
@@ -386,7 +384,7 @@ def main():
                 nb_tr_steps += 1
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     global_step += 1
-                summary.add_scalar('%s_training_loss' % cur_batch_task, loss.item(), global_step)
+
             # end of epoch
             # eval on dev set
             # eval_result = {}
@@ -575,10 +573,7 @@ def main():
             #print(preds, preds.shape)
             rel_values = preds[:, all_label_ids[0]]
             rel_values = torch.tensor(rel_values)
-            #print(rel_values, rel_values.shape)
             _, argsort1 = torch.sort(rel_values, descending=True)
-            #print(max_values)
-            #print(argsort1)
             argsort1 = argsort1.cpu().numpy()
             rank1 = np.where(argsort1 == 0)[0][0]
 

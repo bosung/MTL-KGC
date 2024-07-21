@@ -39,6 +39,7 @@ python run_bert_multitask.py \
     --bert_model {test_model} \
     --max_seq_length 128 \
     --output_dir ./output_dir \
+    --task_list lp
 ```
 **Performance**
 
